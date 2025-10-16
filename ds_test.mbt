@@ -1199,3 +1199,395 @@ test "single_node_graph" {
   let dist = g.dijkstra(a)
   inspect(dist.size().to_string(), content="1")
 }
+
+///|
+/// 测试 Johnson 全点对最短路径算法
+test "johnson_apsp" {
+  let g : Graph2[String, Int] = Graph2::new(directed=true)
+
+  // 创建一个简单的有向图
+  // A --1--> B --2--> C
+  // |         \
+  // |          \
+  // 5           3
+  // |            \
+  // v             v
+  // D <--1-- E <--1-- F
+
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  let e = g.add_node(weight="E")
+  let f = g.add_node(weight="F")
+  g.add_edge(a, b, weight=1) |> ignore
+  g.add_edge(b, c, weight=2) |> ignore
+  g.add_edge(a, d, weight=5) |> ignore
+  g.add_edge(b, f, weight=3) |> ignore
+  g.add_edge(f, e, weight=1) |> ignore
+  g.add_edge(e, d, weight=1) |> ignore
+  let distances = g.johnson_apsp()
+
+  // 验证一些距离
+  inspect(distances[a.ix][c.ix].unwrap().to_string(), content="3") // A->B->C = 1+2 = 3
+  inspect(distances[a.ix][d.ix].unwrap().to_string(), content="5") // A->D = 5
+  inspect(distances[a.ix][e.ix].unwrap().to_string(), content="5") // A->B->F->E = 1+3+1 = 5
+  inspect(distances[b.ix][d.ix].unwrap().to_string(), content="5") // B->F->E->D = 3+1+1 = 5
+  inspect(distances[c.ix][d.ix] == None, content="true") // 从C无法到达D
+}
+
+///|
+/// 测试 Hierholzer 欧拉回路算法
+test "find_euler_circuit" {
+  // 创建一个包含欧拉回路的图
+  let g : Graph2[String, Int] = Graph2::new(directed=false)
+
+  // 创建完全图 K4，它有欧拉回路(每个节点度为偶数)
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  g.add_edge(a, b, weight=1) |> ignore
+  g.add_edge(a, c, weight=2) |> ignore
+  g.add_edge(a, d, weight=3) |> ignore
+  g.add_edge(b, c, weight=4) |> ignore
+  g.add_edge(b, d, weight=5) |> ignore
+  g.add_edge(c, d, weight=6) |> ignore
+  let circuit = g.find_euler_circuit()
+
+  // 检查回路长度（应为边数+1）
+  inspect(circuit.length().to_string(), content="7") // 6条边 + 1 = 7个节点
+
+  // 检查首尾节点是否相同
+  inspect(
+    (circuit[0] == circuit[circuit.length() - 1]).to_string(),
+    content="true",
+  )
+
+  // 创建一个没有欧拉回路的图（有节点的度为奇数）
+  let g2 : Graph2[String, Int] = Graph2::new(directed=false)
+  let e = g2.add_node(weight="E")
+  let f = g2.add_node(weight="F")
+  let h = g2.add_node(weight="H")
+  g2.add_edge(e, f, weight=1) |> ignore
+  g2.add_edge(f, h, weight=2) |> ignore
+  let circuit2 = g2.find_euler_circuit()
+
+  // 无欧拉回路，应返回空数组
+  inspect(circuit2.length().to_string(), content="0")
+}
+
+///|
+/// 测试 Hierholzer 欧拉路径算法
+test "find_euler_path" {
+  // 创建一个包含欧拉路径但不包含欧拉回路的图
+  let g : Graph2[String, Int] = Graph2::new(directed=false)
+
+  // 构建图使得只有两个节点度为奇数
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  g.add_edge(a, b, weight=1) |> ignore
+  g.add_edge(b, c, weight=2) |> ignore
+  g.add_edge(c, d, weight=3) |> ignore
+  g.add_edge(a, c, weight=4) |> ignore // 使a和d的度为奇数
+  let path = g.find_euler_path()
+
+  // 检查路径长度（应为边数+1）
+  inspect(path.length().to_string(), content="5") // 4条边 + 1 = 5个节点
+
+  // 检查路径的端点是否是度为奇数的节点
+  let start_node = g.node_weights[path[0].ix]
+  let end_node = g.node_weights[path[path.length() - 1].ix]
+  let is_correct_path = (start_node == "A" && end_node == "D") ||
+    (start_node == "D" && end_node == "A")
+  inspect(is_correct_path.to_string(), content="true")
+}
+
+///|
+/// 测试 Bron-Kerbosch 最大团算法
+test "find_maximum_cliques" {
+  let g : Graph2[String, Unit] = Graph2::new(directed=false)
+
+  // 创建一个包含两个最大团的图：{A,B,C}和{C,D,E}
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  let e = g.add_node(weight="E")
+  g.add_edge(a, b) |> ignore
+  g.add_edge(a, c) |> ignore
+  g.add_edge(b, c) |> ignore
+  g.add_edge(c, d) |> ignore
+  g.add_edge(c, e) |> ignore
+  g.add_edge(d, e) |> ignore
+  let cliques = g.find_maximum_cliques()
+
+  // 应该找到两个最大团，大小都是3
+  let mut found_size_3 = 0
+  for clique in cliques {
+    if clique.length() == 3 {
+      found_size_3 += 1
+    }
+  }
+  inspect(found_size_3.to_string(), content="2") // 应该有两个大小为3的最大团
+}
+
+///|
+/// 测试最小瓶颈路径算法
+test "min_bottleneck_path" {
+  let g : Graph2[String, Int] = Graph2::new(directed=false)
+
+  // 创建一个简单的图，其中有多条路径
+  // A --1-- B --5-- C
+  // |       |       |
+  // 3       2       4
+  // |       |       |
+  // D --6-- E --7-- F
+
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  let e = g.add_node(weight="E")
+  let f = g.add_node(weight="F")
+  g.add_edge(a, b, weight=1) |> ignore
+  g.add_edge(b, c, weight=5) |> ignore
+  g.add_edge(a, d, weight=3) |> ignore
+  g.add_edge(b, e, weight=2) |> ignore
+  g.add_edge(c, f, weight=4) |> ignore
+  g.add_edge(d, e, weight=6) |> ignore
+  g.add_edge(e, f, weight=7) |> ignore
+
+  // 测试A到F的最小瓶颈路径
+  let bottleneck = g.min_bottleneck_path(a, f)
+
+  // 最小瓶颈路径是A-B-C-F，最大边权是5
+  inspect(bottleneck.unwrap().to_string(), content="5")
+}
+
+///|
+/// 测试次小生成树算法
+test "second_mst" {
+  let g : Graph2[String, Int] = Graph2::new(directed=false)
+
+  // 创建一个图，使其有明确的最小生成树和次小生成树
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  g.add_edge(a, b, weight=1) |> ignore
+  g.add_edge(b, c, weight=2) |> ignore
+  g.add_edge(c, d, weight=3) |> ignore
+  g.add_edge(d, a, weight=4) |> ignore
+  g.add_edge(a, c, weight=5) |> ignore
+
+  // 最小生成树：A-B, B-C, C-D，总权重为1+2+3=6
+  // 次小生成树：A-B, B-C, D-A，总权重为1+2+4=7
+
+  let second_mst_weight = g.second_mst()
+  inspect(second_mst_weight.unwrap().to_string(), content="7")
+}
+
+///|
+/// 测试Dinic最大流算法
+test "dinic_max_flow" {
+  let g : Graph2[String, Int] = Graph2::new(directed=true)
+
+  // 创建一个简单的流网络
+  let source = g.add_node(weight="source")
+  let a = g.add_node(weight="a")
+  let b = g.add_node(weight="b")
+  let c = g.add_node(weight="c")
+  let d = g.add_node(weight="d")
+  let sink = g.add_node(weight="sink")
+  g.add_edge(source, a, weight=10) |> ignore
+  g.add_edge(source, b, weight=10) |> ignore
+  g.add_edge(a, c, weight=4) |> ignore
+  g.add_edge(a, d, weight=8) |> ignore
+  g.add_edge(b, c, weight=9) |> ignore
+  g.add_edge(b, d, weight=6) |> ignore
+  g.add_edge(c, sink, weight=10) |> ignore
+  g.add_edge(d, sink, weight=10) |> ignore
+
+  // 使用Dinic算法计算最大流
+  let max_flow = g.dinic_max_flow(source, sink)
+
+  // 最大流应该是19
+  inspect(max_flow.to_string(), content="19")
+}
+
+///|
+/// 测试Push-Relabel最大流算法
+test "push_relabel_max_flow" {
+  let g : Graph2[String, Int] = Graph2::new(directed=true)
+
+  // 创建与Dinic测试相同的流网络
+  let source = g.add_node(weight="source")
+  let a = g.add_node(weight="a")
+  let b = g.add_node(weight="b")
+  let c = g.add_node(weight="c")
+  let d = g.add_node(weight="d")
+  let sink = g.add_node(weight="sink")
+  g.add_edge(source, a, weight=10) |> ignore
+  g.add_edge(source, b, weight=10) |> ignore
+  g.add_edge(a, c, weight=4) |> ignore
+  g.add_edge(a, d, weight=8) |> ignore
+  g.add_edge(b, c, weight=9) |> ignore
+  g.add_edge(b, d, weight=6) |> ignore
+  g.add_edge(c, sink, weight=10) |> ignore
+  g.add_edge(d, sink, weight=10) |> ignore
+
+  // 使用Push-Relabel算法计算最大流
+  let max_flow = g.push_relabel_max_flow(source, sink)
+
+  // 最大流应该是19
+  inspect(max_flow.to_string(), content="19")
+}
+
+///|
+/// 测试最小费用流算法
+test "min_cost_flow" {
+  let g : Graph2[String, Int] = Graph2::new(directed=true)
+
+  // 创建一个带有成本的流网络
+  let s = g.add_node(weight="s")
+  let a = g.add_node(weight="a")
+  let b = g.add_node(weight="b")
+  let t = g.add_node(weight="t")
+  g.add_edge(s, a, weight=5) |> ignore
+  g.add_edge(s, b, weight=4) |> ignore
+  g.add_edge(a, b, weight=3) |> ignore
+  g.add_edge(a, t, weight=3) |> ignore
+  g.add_edge(b, t, weight=8) |> ignore
+
+  // 定义成本
+  let costs = @hashmap.new()
+  costs.set((s, a), 2)
+  costs.set((s, b), 1)
+  costs.set((a, b), 2)
+  costs.set((a, t), 3)
+  costs.set((b, t), 2)
+
+  // 计算流量为7的最小费用流
+  let (flow, cost) = g.min_cost_flow(s, t, Some(7), costs)
+
+  // 验证返回的流量和成本
+  inspect(flow.to_string(), content="7")
+  inspect(cost.to_string(), content="15") // 具体值取决于算法实现
+}
+
+///|
+/// 测试图同构检测算法
+test "is_isomorphic" {
+  // 创建两个同构的图
+  let g1 : Graph2[Int, Unit] = Graph2::new(directed=false)
+  let g2 : Graph2[Int, Unit] = Graph2::new(directed=false)
+
+  // g1: 0--1--2--3
+  //     |     |
+  //     4-----5
+
+  let a1 = g1.add_node(weight=0)
+  let b1 = g1.add_node(weight=1)
+  let c1 = g1.add_node(weight=2)
+  let d1 = g1.add_node(weight=3)
+  let e1 = g1.add_node(weight=4)
+  let f1 = g1.add_node(weight=5)
+  g1.add_edge(a1, b1) |> ignore
+  g1.add_edge(b1, c1) |> ignore
+  g1.add_edge(c1, d1) |> ignore
+  g1.add_edge(a1, e1) |> ignore
+  g1.add_edge(e1, f1) |> ignore
+  g1.add_edge(c1, f1) |> ignore
+
+  // g2: 0--2--3--5
+  //     |     |
+  //     1-----4
+
+  let a2 = g2.add_node(weight=0)
+  let b2 = g2.add_node(weight=1)
+  let c2 = g2.add_node(weight=2)
+  let d2 = g2.add_node(weight=3)
+  let e2 = g2.add_node(weight=4)
+  let f2 = g2.add_node(weight=5)
+  g2.add_edge(a2, c2) |> ignore
+  g2.add_edge(c2, d2) |> ignore
+  g2.add_edge(d2, f2) |> ignore
+  g2.add_edge(a2, b2) |> ignore
+  g2.add_edge(b2, e2) |> ignore
+  g2.add_edge(d2, e2) |> ignore
+
+  // 测试同构检测
+  let is_iso = g1.is_isomorphic(g2)
+  inspect(is_iso.to_string(), content="true")
+
+  // 创建一个非同构的图
+  let g3 : Graph2[Int, Unit] = Graph2::new(directed=false)
+
+  // g3: 0--1--2
+  //     |  |  |
+  //     5--4--3
+
+  let a3 = g3.add_node(weight=0)
+  let b3 = g3.add_node(weight=1)
+  let c3 = g3.add_node(weight=2)
+  let d3 = g3.add_node(weight=3)
+  let e3 = g3.add_node(weight=4)
+  let f3 = g3.add_node(weight=5)
+  g3.add_edge(a3, b3) |> ignore
+  g3.add_edge(b3, c3) |> ignore
+  g3.add_edge(c3, d3) |> ignore
+  g3.add_edge(d3, e3) |> ignore
+  g3.add_edge(e3, f3) |> ignore
+  g3.add_edge(f3, a3) |> ignore
+  g3.add_edge(b3, e3) |> ignore
+
+  // g1和g3不同构
+  let not_iso = g1.is_isomorphic(g3)
+  inspect(not_iso.to_string(), content="false")
+}
+
+///|
+/// 测试K最短路径算法
+test "k_shortest_paths" {
+  let g : Graph2[String, Int] = Graph2::new(directed=true)
+
+  // 创建一个简单的图，其中有多条从A到E的路径
+  // A --1--> B --2--> E
+  // |        |
+  // 3        1
+  // |        |
+  // v        v
+  // C --2--> D --1--> E
+
+  let a = g.add_node(weight="A")
+  let b = g.add_node(weight="B")
+  let c = g.add_node(weight="C")
+  let d = g.add_node(weight="D")
+  let e = g.add_node(weight="E")
+  g.add_edge(a, b, weight=1) |> ignore
+  g.add_edge(b, e, weight=2) |> ignore
+  g.add_edge(a, c, weight=3) |> ignore
+  g.add_edge(b, d, weight=1) |> ignore
+  g.add_edge(c, d, weight=2) |> ignore
+  g.add_edge(d, e, weight=1) |> ignore
+
+  // 寻找从A到E的3条最短路径
+  let paths = g.k_shortest_paths(a, e, 3)
+
+  // 应该找到3条路径：
+  // 1. A->B->D->E，总权重为3
+  // 2. A->B->E，总权重为3
+  // 3. A->C->D->E，总权重为6
+
+  inspect(paths.length().to_string(), content="3")
+
+  // 检查第一条和第二条路径的权重（都是3）
+  inspect(paths[0].0.to_string(), content="3")
+  inspect(paths[1].0.to_string(), content="3")
+
+  // 检查第三条路径的权重
+  inspect(paths[2].0.to_string(), content="6")
+}

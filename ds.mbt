@@ -2206,3 +2206,1302 @@ pub fn[N, E] CompressedGraph::get_neighbors(
   }
   result
 }
+
+///|
+/// 返回所有点对间的最短距离
+pub fn[N : Default, E : Compare + Add + Default + Sub] Graph2::johnson_apsp(
+  self : Graph2[N, E],
+) -> Array[Array[E?]] {
+  let n = self.node_count()
+
+  // 添加一个辅助节点s连接到所有节点，权重为0
+  let aux_graph = Graph2::new(directed=self.directed)
+  for i in 0..<n {
+    ignore(aux_graph.add_node(weight=self.node_weights[i]))
+  }
+  let s = aux_graph.add_node(weight=N::default())
+
+  // 复制原始图的所有边
+  for e_idx in 0..<self.edge_count() {
+    let (u, v, weight) = self.edges[e_idx]
+    aux_graph.add_edge(u, v, weight~)
+  }
+
+  // 添加从s到所有节点的边，权重为0
+  for i in 0..<n {
+    aux_graph.add_edge(s, NodeIndex::new(i), weight=E::default())
+  }
+
+  // 使用Bellman-Ford计算从s到所有节点的最短路径
+  let (h, has_negative_cycle) = aux_graph.bellman_ford(s)
+  if has_negative_cycle {
+    abort("Graph contains a negative cycle")
+  }
+
+  // 重赋权 (reweighting)
+  let reweighted = Graph2::new(directed=self.directed)
+  for i in 0..<n {
+    ignore(reweighted.add_node(weight=self.node_weights[i]))
+  }
+  for e_idx in 0..<self.edge_count() {
+    let (u, v, weight) = self.edges[e_idx]
+    let new_weight = weight + h[u.ix].unwrap() - h[v.ix].unwrap()
+    reweighted.add_edge(u, v, weight=new_weight)
+  }
+
+  // 对每个节点运行Dijkstra
+  let result = Array::new()
+  for i in 0..<n {
+    let node = NodeIndex::new(i)
+    let distances = reweighted.dijkstra(node)
+
+    // 恢复原始权重
+    let row = Array::new()
+    for j in 0..<n {
+      let target = NodeIndex::new(j)
+      if distances.get(target) != None {
+        let dist = distances.get(target).unwrap()
+        let original_dist = dist - h[i].unwrap() + h[j].unwrap()
+        row.push(Some(original_dist))
+      } else {
+        row.push(None)
+      }
+    }
+    result.push(row)
+  }
+  result
+}
+
+///| Hierholzer算法 - 构造欧拉回路
+
+///|
+/// 返回欧拉回路上的节点序列，如果不存在则返回空数组
+pub fn[N : Default, E : Eq + Default] Graph2::find_euler_circuit(
+  self : Graph2[N, E],
+) -> Array[NodeIndex] {
+  // 检查是否存在欧拉回路
+  if !self.has_euler_circuit() {
+    return Array::new()
+  }
+
+  // 创建一个临时图的副本来跟踪未使用的边
+  let temp_graph = Graph2::new(directed=self.directed)
+  let n = self.node_count()
+
+  // 复制节点
+  for i in 0..<n {
+    ignore(temp_graph.add_node(weight=self.node_weights[i]))
+  }
+
+  // 复制边
+  for e_idx in 0..<self.edge_count() {
+    let (u, v, weight) = self.edges[e_idx]
+    temp_graph.add_edge(u, v, weight~)
+  }
+
+  // 从任何非孤立点开始
+  let mut start = -1
+  for i in 0..<n {
+    if temp_graph.adj[i].length() > 0 {
+      start = i
+      break
+    }
+  }
+  if start == -1 {
+    return Array::new() // 图中没有边
+  }
+
+  // 执行Hierholzer算法
+  let circuit = Array::new()
+  let stack = Array::new()
+  stack.push(NodeIndex::new(start))
+  while !stack.is_empty() {
+    let current = stack.last().unwrap()
+    if temp_graph.adj[current.ix].length() == 0 {
+      // 当前节点没有未访问的边，将其加入结果
+      circuit.push(current)
+      ignore(stack.pop())
+    } else {
+      // 取下一条可用边
+      let (next, _) = temp_graph.adj[current.ix][0]
+
+      // 从图中移除这条边
+      ignore(temp_graph.remove_edge_nodes(current, next))
+
+      // 继续探索
+      stack.push(next)
+    }
+  }
+
+  // 反转结果以获得正确的顺序
+  let reversed = Array::new()
+  for i = circuit.length() - 1; i >= 0; i = i - 1 {
+    reversed.push(circuit[i])
+    if i == 0 {
+      break
+    }
+  }
+  reversed
+}
+
+///|
+/// 构造欧拉路径（如果存在）
+pub fn[N : Default, E : Default + Eq] Graph2::find_euler_path(
+  self : Graph2[N, E],
+) -> Array[NodeIndex] {
+  if !self.has_euler_path() {
+    return Array::new()
+  }
+
+  // 找到奇数度数的起点（如果存在）
+  let n = self.node_count()
+  let mut start = -1
+  for i in 0..<n {
+    let degree = self.adj[i].length()
+    if degree % 2 == 1 {
+      start = i
+      break
+    }
+  }
+
+  // 如果没有奇数度点（所有点都是偶数度），从任何非孤立点开始
+  if start == -1 {
+    for i in 0..<n {
+      if self.adj[i].length() > 0 {
+        start = i
+        break
+      }
+    }
+  }
+  if start == -1 {
+    return Array::new() // 图中没有边
+  }
+
+  // 创建一个临时图的副本
+  let temp_graph = Graph2::new(directed=self.directed)
+
+  // 复制节点
+  for i in 0..<n {
+    ignore(temp_graph.add_node(weight=self.node_weights[i]))
+  }
+
+  // 复制边
+  for e_idx in 0..<self.edge_count() {
+    let (u, v, weight) = self.edges[e_idx]
+    temp_graph.add_edge(u, v, weight~)
+  }
+
+  // 执行类似于find_euler_circuit的算法
+  let path = Array::new()
+  let stack = Array::new()
+  stack.push(NodeIndex::new(start))
+  while !stack.is_empty() {
+    let current = stack.last().unwrap()
+    if temp_graph.adj[current.ix].length() == 0 {
+      // 当前节点没有未访问的边，将其加入结果
+      path.push(current)
+      ignore(stack.pop())
+    } else {
+      // 取下一条可用边
+      let (next, _) = temp_graph.adj[current.ix][0]
+
+      // 从图中移除这条边
+      ignore(temp_graph.remove_edge_nodes(current, next))
+
+      // 继续探索
+      stack.push(next)
+    }
+  }
+
+  // 反转结果以获得正确的顺序
+  let reversed = Array::new()
+  for i = path.length() - 1; i >= 0; i = i - 1 {
+    reversed.push(path[i])
+    if i == 0 {
+      break
+    }
+  }
+  reversed
+}
+
+///|
+/// 近似最小顶点覆盖算法（2-近似）
+
+///|
+/// 返回顶点覆盖集合（能覆盖图中所有边的最小节点集）
+pub fn[N, E] Graph2::approx_min_vertex_cover(
+  self : Graph2[N, E],
+) -> Array[NodeIndex] {
+  let n = self.node_count()
+  let result = Array::new()
+  let visited = Array::make(n, false)
+
+  // 创建可修改的边列表副本
+  let remaining_edges = Array::new()
+  for e_idx in 0..<self.edge_count() {
+    remaining_edges.push(self.edges[e_idx])
+  }
+
+  // 贪心选择边并添加其两端点
+  while !remaining_edges.is_empty() {
+    // 获取一条未覆盖的边
+    let (u, v, _) = remaining_edges.remove(0)
+
+    // 如果两个端点都未被访问，则加入覆盖集
+    if !visited[u.ix] {
+      visited[u.ix] = true
+      result.push(u)
+    }
+    if !visited[v.ix] {
+      visited[v.ix] = true
+      result.push(v)
+    }
+
+    // 移除所有与u或v相连的边
+    let mut i = 0
+    while i < remaining_edges.length() {
+      let (x, y, _) = remaining_edges[i]
+      if visited[x.ix] || visited[y.ix] {
+        ignore(remaining_edges.remove(i))
+      } else {
+        i += 1
+      }
+    }
+  }
+  result
+}
+
+///|
+/// 返回顶点覆盖集合，使用最大度启发式
+pub fn[N, E] Graph2::approx_min_vertex_cover_optimized(
+  self : Graph2[N, E],
+) -> Array[NodeIndex] {
+  let n = self.node_count()
+  let result = Array::new()
+  let visited_nodes = Array::make(n, false)
+  let visited_edges = Array::make(self.edge_count(), false)
+
+  // 继续直到所有边都被覆盖
+  while true {
+    // 找到度数最大的未覆盖节点
+    let mut max_degree = -1
+    let mut max_node = -1
+    for i in 0..<n {
+      if visited_nodes[i] {
+        continue
+      }
+
+      // 计算未覆盖边的数量
+      let mut uncovered = 0
+      for e_idx in 0..<self.edge_count() {
+        if !visited_edges[e_idx] {
+          let (u, v, _) = self.edges[e_idx]
+          if u.ix == i || v.ix == i {
+            uncovered += 1
+          }
+        }
+      }
+      if uncovered > max_degree {
+        max_degree = uncovered
+        max_node = i
+      }
+    }
+
+    // 如果没有未覆盖的边，结束
+    if max_degree == 0 {
+      break
+    }
+
+    // 添加到顶点覆盖
+    visited_nodes[max_node] = true
+    result.push(NodeIndex::new(max_node))
+
+    // 标记所有相连的边为已覆盖
+    for e_idx in 0..<self.edge_count() {
+      if !visited_edges[e_idx] {
+        let (u, v, _) = self.edges[e_idx]
+        if u.ix == max_node || v.ix == max_node {
+          visited_edges[e_idx] = true
+        }
+      }
+    }
+  }
+  result
+}
+
+///|
+/// 求次小生成树（Second Minimum Spanning Tree）
+/// 返回次小生成树的总权重
+pub fn[N] Graph2::second_mst(self : Graph2[N, Int]) -> Int? {
+  let mst_edges = self.kruskal_mst()
+  let mst_weight = mst_edges.fold(init=0, fn(acc, e) { acc + e.2 })
+  let n = self.node_count()
+  guard mst_edges.length() == n - 1 else { return None }
+
+  // 构建MST的边集
+  let mst_set = @hashset.new()
+  for edge in mst_edges {
+    let (u, v, w) = edge
+    mst_set.add((u.ix, v.ix, w))
+    mst_set.add((v.ix, u.ix, w))
+  }
+
+  // 枚举非MST边，尝试替换
+  let mut min_second = None
+  for edge in self.edges {
+    let (u, v, w) = edge
+    if mst_set.contains((u.ix, v.ix, w)) {
+      continue
+    }
+
+    // 在MST中加入(u,v)，会形成一个环，找到环上最大权边
+    let mut max_in_cycle = -1
+
+    // BFS找u到v的路径
+    let parent = Array::make(n, -1)
+    let visited = Array::make(n, false)
+    let queue = @deque.new()
+    queue.push_back(u)
+    visited[u.ix] = true
+    while !queue.is_empty() {
+      let curr = queue.pop_front().unwrap()
+      if curr == v {
+        break
+      }
+      for pair in self.adj[curr.ix] {
+        let (next, ww) = pair
+        if !visited[next.ix] && mst_set.contains((curr.ix, next.ix, ww)) {
+          parent[next.ix] = curr.ix
+          visited[next.ix] = true
+          queue.push_back(next)
+        }
+      }
+    }
+
+    // 回溯路径，找最大权边
+    let mut x = v.ix
+    while parent[x] != -1 {
+      let px = parent[x]
+      match self.find_edge(NodeIndex::new(px), NodeIndex::new(x)) {
+        Some(idx) => {
+          let (_, _, edge_w) = self.edges[idx]
+          if edge_w > max_in_cycle {
+            max_in_cycle = edge_w
+          }
+        }
+        None => ()
+      }
+      x = px
+    }
+
+    // 替换最大权边
+    let candidate = mst_weight - max_in_cycle + w
+    if min_second == None || candidate < min_second.unwrap() {
+      min_second = Some(candidate)
+    }
+  }
+  min_second
+}
+
+///|
+/// K最短路径算法 - 返回从源点到目标点的K条最短路径
+/// 使用Yen算法计算简单路径（不包含环）
+/// 返回一个数组，每个元素是(总距离, 路径)对
+pub fn[N, E : Compare + Add + Default] Graph2::k_shortest_paths(
+  self : Graph2[N, E],
+  source : NodeIndex,
+  target : NodeIndex,
+  k : Int,
+) -> Array[(E, Array[NodeIndex])] {
+  // 保存结果的K条最短路径
+  let result = Array::new()
+
+  // 如果源点和目标点相同，直接返回单节点路径
+  if source == target {
+    result.push((E::default(), [source]))
+    return result
+  }
+
+  // 找到第一条最短路径
+  let shortest_path = self.dijkstra_path(source, target)
+  if shortest_path.is_empty() {
+    return result // 如果没有路径存在，返回空结果
+  }
+
+  // 计算路径长度
+  let path_cost = self.path_cost(shortest_path)
+  result.push((path_cost, shortest_path))
+  if k == 1 {
+    return result // 只需要一条路径
+  }
+
+  // 候选路径集合
+  let candidates = @priority_queue.new()
+
+  // 对每个已找到的路径，计算可能的偏离点
+  for path_index = 0; path_index < k - 1; path_index = path_index + 1 {
+    if path_index >= result.length() {
+      break // 没有更多路径可以找到
+    }
+    let (_, current_path) = result[path_index]
+
+    // 对路径上的每个节点（除了目标节点）尝试找偏离路径
+    for i = 0; i < current_path.length() - 1; i = i + 1 {
+      let spur_node = current_path[i]
+      let root_path = Array::new()
+
+      // 提取从源点到当前偏离点的子路径
+      for j in 0..=i {
+        root_path.push(current_path[j])
+      }
+
+      // 临时移除在已有路径中同一位置的边，避免找到相同路径
+      let removed_edges = Array::new()
+      for p_idx in 0..<result.length() {
+        let (_, path) = result[p_idx]
+        if i < path.length() - 1 && root_path.length() <= path.length() {
+          // 检查根路径是否匹配
+          let mut is_match = true
+          for j in 0..<root_path.length() {
+            if root_path[j] != path[j] {
+              is_match = false
+              break
+            }
+          }
+          if is_match {
+            // 移除下一条边
+            let u = path[i]
+            let v = path[i + 1]
+            let edge_idx_opt = self.find_edge(u, v)
+            if edge_idx_opt != None {
+              let edge_idx = edge_idx_opt.unwrap()
+              let (u, v, w) = self.edges[edge_idx]
+              removed_edges.push((u, v, w, edge_idx))
+              ignore(self.remove_edge(edge_idx))
+            }
+          }
+        }
+      }
+
+      // 从偏离点找到到目标的最短路径
+      let spur_path = self.dijkstra_path(spur_node, target)
+
+      // 恢复移除的边
+      for edge in removed_edges {
+        let (u, v, w, _) = edge
+        self.add_edge(u, v, weight=w)
+      }
+      if !spur_path.is_empty() {
+        // 构建完整的候选路径（根路径 + 偏离路径，需要移除重复的偏离点）
+        let total_path = Array::new()
+        for j in 0..<root_path.length() {
+          total_path.push(root_path[j])
+        }
+        for j in 1..<spur_path.length() {
+          total_path.push(spur_path[j])
+        }
+
+        // 计算总路径成本
+        let total_cost = self.path_cost(total_path)
+
+        // 添加到候选集合
+        candidates.push((total_cost, total_path))
+      }
+    }
+
+    // 如果没有更多候选路径，结束搜索
+    if candidates.is_empty() {
+      break
+    }
+
+    // 选择下一个最短路径
+    let (cost, path) = candidates.pop().unwrap()
+
+    // 检查路径是否已存在
+    let mut duplicate = false
+    for _, existing_path in result {
+      if paths_equal(path, existing_path.1) {
+        duplicate = true
+        break
+      }
+    }
+
+    // 如果是新路径，添加到结果
+    if !duplicate {
+      result.push((cost, path))
+    }
+  }
+  result
+}
+
+///|
+/// 计算路径的总成本
+fn[N, E : Add + Default] Graph2::path_cost(
+  self : Graph2[N, E],
+  path : Array[NodeIndex],
+) -> E {
+  if path.length() < 2 {
+    return E::default()
+  }
+  let mut total_cost = E::default()
+  for i = 0; i < path.length() - 1; i = i + 1 {
+    let u = path[i]
+    let v = path[i + 1]
+
+    // 查找边权重
+    let mut found = false
+    for pair in self.adj[u.ix] {
+      let (neighbor, weight) = pair
+      if neighbor == v {
+        total_cost = total_cost + weight
+        found = true
+        break
+      }
+    }
+    if !found {
+      abort("Invalid path - edge not found")
+    }
+  }
+  total_cost
+}
+
+///|
+/// 使用Dijkstra算法找到从源点到目标点的最短路径
+fn[N, E : Compare + Add + Default] Graph2::dijkstra_path(
+  self : Graph2[N, E],
+  source : NodeIndex,
+  target : NodeIndex,
+) -> Array[NodeIndex] {
+  let n = self.node_count()
+  let dist = Array::make(n, None)
+  let prev = Array::make(n, -1)
+
+  // 使用优先队列的Dijkstra算法
+  let pq = @priority_queue.new()
+  dist[source.ix] = Some(E::default())
+  pq.push((E::default(), source))
+  while !pq.is_empty() {
+    let (d, u) = pq.pop().unwrap()
+    if u == target {
+      break // 找到目标，提前结束
+    }
+    if dist[u.ix] != None && d > dist[u.ix].unwrap() {
+      continue // 已找到更短路径
+    }
+    for pair in self.adj[u.ix] {
+      let (v, weight) = pair
+      let new_dist = d + weight
+      if dist[v.ix] == None || new_dist < dist[v.ix].unwrap() {
+        dist[v.ix] = Some(new_dist)
+        prev[v.ix] = u.ix
+        pq.push((new_dist, v))
+      }
+    }
+  }
+
+  // 如果没有找到路径，返回空数组
+  if dist[target.ix] == None {
+    return Array::new()
+  }
+
+  // 重建路径
+  let path = Array::new()
+  let mut current = target.ix
+  while current != -1 {
+    path.insert(0, NodeIndex::new(current))
+    current = prev[current]
+  }
+  path
+}
+
+///|
+/// 比较两个路径是否相同
+fn paths_equal(path1 : Array[NodeIndex], path2 : Array[NodeIndex]) -> Bool {
+  if path1.length() != path2.length() {
+    return false
+  }
+  for i = 0; i < path1.length(); i = i + 1 {
+    if path1[i] != path2[i] {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Dinic最大流算法 - 比Edmonds-Karp更高效的最大流实现，适用于大多数网络
+/// - source: 源点
+/// - sink: 汇点
+/// - 返回从源点到汇点的最大流量
+pub fn[N, E : Compare + Add + Default + Sub] Graph2::dinic_max_flow(
+  self : Graph2[N, E],
+  source : NodeIndex,
+  sink : NodeIndex,
+) -> E {
+  let n = self.node_count()
+  guard source.ix >= 0 &&
+    source.ix < n &&
+    sink.ix >= 0 &&
+    sink.ix < n &&
+    source != sink else {
+    return E::default()
+  }
+
+  // 创建残差网络
+  let residual = Array::new()
+  for _ in 0..<n {
+    residual.push(Array::make(n, E::default()))
+  }
+
+  // 初始化残差网络
+  for u_idx in 0..<n {
+    for pair in self.adj[u_idx] {
+      let (v, capacity) = pair
+      residual[u_idx][v.ix] = capacity
+    }
+  }
+
+  // 层次图 - 记录每个节点的层次
+  let level = Array::make(n, -1)
+
+  // 构建层次图
+  fn build_level_graph(
+    residual : Array[Array[E]],
+    level : Array[Int],
+    source : NodeIndex,
+    sink : NodeIndex,
+    n : Int,
+  ) -> Bool {
+    // 重置所有层次
+    for i in 0..<n {
+      level[i] = -1
+    }
+    level[source.ix] = 0
+
+    // 使用BFS构建层次图
+    let queue = @deque.new()
+    queue.push_back(source.ix)
+    while !queue.is_empty() {
+      let u = queue.pop_front().unwrap()
+      for v in 0..<n {
+        if level[v] == -1 && residual[u][v] > E::default() {
+          level[v] = level[u] + 1
+          queue.push_back(v)
+        }
+      }
+    }
+
+    // 如果汇点被标记，说明还有增广路径
+    level[sink.ix] != -1
+  }
+
+  // 使用DFS寻找增广路径并更新残差网络
+  fn dfs_send_flow(
+    residual : Array[Array[E]],
+    level : Array[Int],
+    next_edge : Array[Int],
+    u : Int,
+    sink : NodeIndex,
+    flow_limit : E,
+  ) -> E {
+    // 到达汇点
+    if u == sink.ix {
+      return flow_limit
+    }
+
+    // 从当前边开始检查
+    for v = next_edge[u]; v < residual.length(); v = v + 1 {
+      next_edge[u] = v // 更新当前边
+
+      // 只考虑层次递增的边且有剩余容量
+      if level[v] == level[u] + 1 && residual[u][v] > E::default() {
+        // 递归寻找从v到汇点的流量
+        let bottle_neck = dfs_send_flow(
+          residual,
+          level,
+          next_edge,
+          v,
+          sink,
+          @cmp.minimum(flow_limit, residual[u][v]),
+        )
+        if bottle_neck > E::default() {
+          // 更新残差网络
+          residual[u][v] = residual[u][v] - bottle_neck
+          residual[v][u] = residual[v][u] + bottle_neck
+          return bottle_neck
+        }
+      }
+    }
+
+    // 如果没有找到增广路径，将节点的层次标记为无效
+    level[u] = -1
+    E::default()
+  }
+
+  let mut max_flow = E::default()
+
+  // 不断寻找增广路径
+  while build_level_graph(residual, level, source, sink, n) {
+    // 记录每个节点当前检查到的边
+    let next_edge = Array::make(n, 0)
+
+    // 寻找所有可行的增广路径
+    let mut path_flow = dfs_send_flow(
+      residual,
+      level,
+      next_edge,
+      source.ix,
+      sink,
+      E::default(),
+    )
+    while path_flow > E::default() {
+      max_flow = max_flow + path_flow
+      path_flow = dfs_send_flow(
+        residual,
+        level,
+        next_edge,
+        source.ix,
+        sink,
+        E::default(),
+      )
+    }
+  }
+  max_flow
+}
+
+///|
+/// 最小费用流算法 - 计算满足指定流量需求的最小成本流
+/// - source: 源点
+/// - sink: 汇点
+/// - required_flow: 所需的流量值，如果为None则寻找最大流
+/// - costs: 每条边的单位流量成本 (u, v) -> cost
+/// - 返回: (实际流量, 总成本)，如果无法满足流量需求则返回能达到的最大流量
+pub fn[N] Graph2::min_cost_flow(
+  self : Graph2[N, Int],
+  source : NodeIndex,
+  sink : NodeIndex,
+  required_flow : Int?,
+  costs : @hashmap.HashMap[(NodeIndex, NodeIndex), Int],
+) -> (Int, Int) {
+  let n = self.node_count()
+  guard source.ix >= 0 &&
+    source.ix < n &&
+    sink.ix >= 0 &&
+    sink.ix < n &&
+    source != sink else {
+    return (0, 0)
+  }
+
+  // 创建残差网络
+  let residual = Array::new()
+  for _ in 0..<n {
+    residual.push(Array::make(n, 0))
+  }
+
+  // 创建成本网络和流量网络
+  let cost_network = Array::new()
+  let flow_network = Array::new()
+  for _ in 0..<n {
+    cost_network.push(Array::make(n, 0))
+    flow_network.push(Array::make(n, 0))
+  }
+
+  // 初始化网络
+  for u_idx in 0..<n {
+    for pair in self.adj[u_idx] {
+      let (v, capacity) = pair
+      residual[u_idx][v.ix] = capacity
+
+      // 使用原始节点对象查询成本
+      let u_node = NodeIndex::new(u_idx)
+      let edge_cost = costs.get((u_node, v)).unwrap_or(0)
+      cost_network[u_idx][v.ix] = edge_cost
+      cost_network[v.ix][u_idx] = -edge_cost // 反向边的成本取负
+    }
+  }
+  let mut total_flow = 0
+  let mut total_cost = 0
+  let target_flow = required_flow.unwrap_or(@int.max_value) // 如果没有指定流量，则设为最大值
+
+  // 连续最短路径增广
+  while total_flow < target_flow {
+    // 使用Bellman-Ford算法找最短路径（处理负权边）
+    let dist = Array::make(n, @int.max_value)
+    let prev = Array::make(n, -1)
+    dist[source.ix] = 0
+
+    // 松弛操作 - 找最小成本路径
+    let mut path_found = false
+    for _ in 0..<n {
+      let mut updated = false
+      for u in 0..<n {
+        if dist[u] == @int.max_value {
+          continue
+        }
+        for v in 0..<n {
+          if residual[u][v] > 0 {
+            let new_dist = dist[u] + cost_network[u][v]
+            if new_dist < dist[v] {
+              dist[v] = new_dist
+              prev[v] = u
+              updated = true
+              if v == sink.ix {
+                path_found = true
+              }
+            }
+          }
+        }
+      }
+      if !updated {
+        break
+      }
+    }
+    if !path_found {
+      break // 没有更多路径可以增广
+    }
+
+    // 计算可以增加的最大流量
+    let mut max_flow_increase = target_flow - total_flow
+    let mut v = sink.ix
+    while v != source.ix {
+      let u = prev[v]
+      max_flow_increase = @cmp.minimum(max_flow_increase, residual[u][v])
+      v = u
+    }
+
+    // 更新残差网络和流量
+    v = sink.ix
+    while v != source.ix {
+      let u = prev[v]
+      residual[u][v] -= max_flow_increase
+      residual[v][u] += max_flow_increase
+      flow_network[u][v] += max_flow_increase
+      flow_network[v][u] -= max_flow_increase
+      total_cost += max_flow_increase * cost_network[u][v]
+      v = u
+    }
+    total_flow += max_flow_increase
+  }
+  (total_flow, total_cost)
+}
+
+///|
+/// 图同构检测 - 判断两个图是否结构相同
+/// 使用WL (Weisfeiler-Lehman) 算法进行同构测试
+/// 注意：这是一个启发式算法，可能在某些特殊图结构上存在误判
+pub fn[N, E] Graph2::is_isomorphic(
+  self : Graph2[N, E],
+  other : Graph2[N, E],
+) -> Bool {
+  // 基本图特性比较
+  let n = self.node_count()
+  if n != other.node_count() || self.edge_count() != other.edge_count() {
+    return false
+  }
+
+  // 比较度序列
+  let self_degrees = Array::new()
+  let other_degrees = Array::new()
+  for i in 0..<n {
+    self_degrees.push(self.adj[i].length())
+    other_degrees.push(other.adj[i].length())
+  }
+  self_degrees.sort()
+  other_degrees.sort()
+  for i in 0..<n {
+    if self_degrees[i] != other_degrees[i] {
+      return false
+    }
+  }
+
+  // WL算法迭代
+  // 初始化标签为节点的度
+  let self_labels = Array::new()
+  let other_labels = Array::new()
+  for i in 0..<n {
+    self_labels.push(self.adj[i].length())
+    other_labels.push(other.adj[i].length())
+  }
+  let mut changed = true
+  let max_iterations = 10 // 限制迭代次数
+  let mut iter = 0
+  while changed && iter < max_iterations {
+    changed = false
+    iter += 1
+
+    // 计算新标签
+    let self_new_labels = Array::new()
+    let other_new_labels = Array::new()
+    for i in 0..<n {
+      // 收集邻居标签
+      let self_neighbor_labels = Array::new()
+      let other_neighbor_labels = Array::new()
+      for pair in self.adj[i] {
+        let (neighbor, _) = pair
+        self_neighbor_labels.push(self_labels[neighbor.ix])
+      }
+      for pair in other.adj[i] {
+        let (neighbor, _) = pair
+        other_neighbor_labels.push(other_labels[neighbor.ix])
+      }
+
+      // 排序邻居标签
+      self_neighbor_labels.sort()
+      other_neighbor_labels.sort()
+
+      // 组合当前标签和邻居标签
+      let self_new_label = hash_combine(self_labels[i], self_neighbor_labels)
+      let other_new_label = hash_combine(other_labels[i], other_neighbor_labels)
+      self_new_labels.push(self_new_label)
+      other_new_labels.push(other_new_label)
+    }
+
+    // 检查新旧标签是否不同
+    for i in 0..<n {
+      if self_labels[i] != self_new_labels[i] ||
+        other_labels[i] != other_new_labels[i] {
+        changed = true
+        break
+      }
+    }
+
+    // 更新标签
+    for i in 0..<n {
+      self_labels[i] = self_new_labels[i]
+      other_labels[i] = other_new_labels[i]
+    }
+
+    // 比较标签分布
+    let self_label_hist = @hashmap.new()
+    let other_label_hist = @hashmap.new()
+    for i in 0..<n {
+      self_label_hist[self_labels[i]] = self_label_hist
+        .get(self_labels[i])
+        .unwrap_or(0) +
+        1
+      other_label_hist[other_labels[i]] = other_label_hist
+        .get(other_labels[i])
+        .unwrap_or(0) +
+        1
+    }
+
+    // 如果标签分布不同，图不同构
+    if self_label_hist.size() != other_label_hist.size() {
+      return false
+    }
+    for label, count in self_label_hist {
+      if other_label_hist.get(label).unwrap_or(0) != count {
+        return false
+      }
+    }
+  }
+  true
+}
+
+///|
+/// 辅助函数：结合标签和邻居标签生成新标签
+fn hash_combine(label : Int, neighbors : Array[Int]) -> Int {
+  let mut hash = label
+  for n_label in neighbors {
+    hash = hash * 31 + n_label
+  }
+  hash
+}
+
+///|
+/// 求最小瓶颈路径（Minimum Bottleneck Path）
+/// 返回从start到end的最小瓶颈值
+pub fn[N] Graph2::min_bottleneck_path(
+  self : Graph2[N, Int],
+  start : NodeIndex,
+  end : NodeIndex,
+) -> Int? {
+  let n = self.node_count()
+  let bottleneck = Array::make(n, @int.max_value)
+  let visited = Array::make(n, false)
+  let pq = @priority_queue.new()
+  bottleneck[start.ix] = 0
+  pq.push((0, start))
+  while !pq.is_empty() {
+    let (cur_bottleneck, u) = pq.pop().unwrap()
+    if visited[u.ix] {
+      continue
+    }
+    visited[u.ix] = true
+    if u == end {
+      return Some(cur_bottleneck)
+    }
+    for pair in self.adj[u.ix] {
+      let (v, w) = pair
+      let next_bottleneck = @cmp.maximum(cur_bottleneck, w)
+      if !visited[v.ix] && next_bottleneck < bottleneck[v.ix] {
+        bottleneck[v.ix] = next_bottleneck
+        pq.push((next_bottleneck, v))
+      }
+    }
+  }
+  None
+}
+
+///|
+/// Push-Relabel最大流算法 - 适合稠密图的高效最大流算法
+/// - source: 源点
+/// - sink: 汇点
+/// - 返回从源点到汇点的最大流量
+pub fn[N, E : Compare + Add + Default + Sub] Graph2::push_relabel_max_flow(
+  self : Graph2[N, E],
+  source : NodeIndex,
+  sink : NodeIndex,
+) -> E {
+  let n = self.node_count()
+  guard source.ix >= 0 &&
+    source.ix < n &&
+    sink.ix >= 0 &&
+    sink.ix < n &&
+    source != sink else {
+    return E::default()
+  }
+
+  // 创建残差网络
+  let residual = Array::new()
+  for _ in 0..<n {
+    residual.push(Array::make(n, E::default()))
+  }
+
+  // 初始化残差网络
+  for u_idx in 0..<n {
+    for pair in self.adj[u_idx] {
+      let (v, capacity) = pair
+      residual[u_idx][v.ix] = capacity
+    }
+  }
+
+  // 节点高度
+  let height = Array::make(n, 0)
+  // 节点超额流量
+  let excess = Array::new()
+  for _ in 0..<n {
+    excess.push(E::default())
+  }
+
+  // 初始化高度和超额流量
+  height[source.ix] = n
+
+  // 将源点的流量推送到邻居
+  for v in 0..<n {
+    if residual[source.ix][v] > E::default() {
+      let flow = residual[source.ix][v]
+      residual[source.ix][v] = E::default() // 减少正向容量
+      residual[v][source.ix] = flow // 增加反向容量
+      excess[v] = excess[v] + flow
+      excess[source.ix] = excess[source.ix] - flow
+    }
+  }
+
+  // 工作队列 - 存储有超额流量的节点
+  let active_nodes = Array::new()
+  for i in 0..<n {
+    if i != source.ix && i != sink.ix && excess[i] > E::default() {
+      active_nodes.push(i)
+    }
+  }
+
+  // 主循环
+  while !active_nodes.is_empty() {
+    let u = active_nodes[0]
+    let old_height = height[u]
+
+    // 执行推送或重标记
+    discharge(u, residual, height, excess, n)
+
+    // 如果节点高度变化，将其移动到队列末尾
+    if height[u] > old_height {
+      let node_u = active_nodes.remove(0)
+      active_nodes.push(node_u)
+    } else {
+      // 检查是否仍有超额流量
+      if excess[u] > E::default() {
+        let node_u = active_nodes.remove(0)
+        active_nodes.push(node_u)
+      } else {
+        ignore(active_nodes.remove(0))
+      }
+
+      // 添加新的活跃节点
+      for v in 0..<n {
+        if v != source.ix &&
+          v != sink.ix &&
+          !active_nodes.contains(v) &&
+          excess[v] > E::default() {
+          active_nodes.push(v)
+        }
+      }
+    }
+  }
+
+  // 最大流量等于汇点的超额流量
+  excess[sink.ix]
+}
+
+///|
+/// 放电操作 - 处理节点的超额流量
+fn[E : Compare + Add + Default + Sub] discharge(
+  u : Int,
+  residual : Array[Array[E]],
+  height : Array[Int],
+  excess : Array[E],
+  n : Int,
+) -> Unit {
+  // 尝试推送超额流量
+  for v in 0..<n {
+    if residual[u][v] > E::default() && height[u] > height[v] {
+      // 计算可以推送的流量
+      let flow = @cmp.minimum(excess[u], residual[u][v])
+      if flow > E::default() {
+        // 推送操作
+        residual[u][v] = residual[u][v] - flow
+        residual[v][u] = residual[v][u] + flow
+        excess[u] = excess[u] - flow
+        excess[v] = excess[v] + flow
+        if excess[u] == E::default() {
+          return
+        }
+      }
+    }
+  }
+
+  // 如果不能推送，执行重标记
+  relabel(u, residual, height, n)
+}
+
+///|
+/// 重标记操作 - 增加节点的高度
+fn[E : Compare + Default] relabel(
+  u : Int,
+  residual : Array[Array[E]],
+  height : Array[Int],
+  n : Int,
+) -> Unit {
+  let mut min_height = @int.max_value
+  for v in 0..<n {
+    if residual[u][v] > E::default() {
+      min_height = @cmp.minimum(min_height, height[v])
+    }
+  }
+  if min_height != @int.max_value {
+    height[u] = min_height + 1
+  }
+}
+
+///|
+/// Bron-Kerbosch算法 - 寻找图中的所有最大团
+/// 返回所有最大团（每个团是一个节点集合）
+pub fn[N, E] Graph2::find_maximum_cliques(
+  self : Graph2[N, E],
+) -> Array[Array[NodeIndex]] {
+  guard !self.directed else {
+    abort("Find maximum cliques only works for undirected graphs")
+  }
+  let n = self.node_count()
+  let result = Array::new()
+
+  // 转换为邻接矩阵以便快速查找
+  let adj_matrix = Array::new()
+  for _ in 0..<n {
+    adj_matrix.push(Array::make(n, false))
+  }
+  for u_idx in 0..<n {
+    for pair in self.adj[u_idx] {
+      let (v, _) = pair
+      adj_matrix[u_idx][v.ix] = true
+      adj_matrix[v.ix][u_idx] = true // 无向图
+    }
+  }
+
+  // Bron-Kerbosch递归实现
+  fn bron_kerbosch(
+    r : Array[Int], // 当前团
+    p : Array[Int], // 候选节点
+    x : Array[Int], // 已排除的节点
+    adj_matrix : Array[Array[Bool]],
+    result : Array[Array[NodeIndex]],
+  ) -> Unit {
+    if p.is_empty() && x.is_empty() {
+      // 找到一个最大团
+      let clique = Array::new()
+      for node_idx in r {
+        clique.push(NodeIndex::new(node_idx))
+      }
+      result.push(clique)
+      return
+    }
+
+    // 选择枢轴点（从P∪X中选择与P中节点连接最多的点）
+    let mut pivot = -1
+    let mut max_connections = -1
+
+    // 从P和X中选择枢轴
+    let p_union_x = Array::new()
+    for v in p {
+      p_union_x.push(v)
+    }
+    for v in x {
+      p_union_x.push(v)
+    }
+    for u in p_union_x {
+      let mut count = 0
+      for v in p {
+        if adj_matrix[u][v] {
+          count += 1
+        }
+      }
+      if count > max_connections {
+        pivot = u
+        max_connections = count
+      }
+    }
+
+    // 使用枢轴优化：只考虑不与枢轴相连的点
+    let p_copy = p.copy()
+    for v in p_copy {
+      // 如果v与pivot相连，跳过
+      if pivot != -1 && adj_matrix[v][pivot] {
+        continue
+      }
+      let new_r = r.copy()
+      new_r.push(v)
+      let new_p = Array::new()
+      let new_x = Array::new()
+
+      // 构建新的P和X集合（v的邻居）
+      for u in p {
+        if adj_matrix[u][v] {
+          new_p.push(u)
+        }
+      }
+      for u in x {
+        if adj_matrix[u][v] {
+          new_x.push(u)
+        }
+      }
+
+      // 递归调用
+      bron_kerbosch(new_r, new_p, new_x, adj_matrix, result)
+
+      // 将v从P移到X
+      match p.search(v) {
+        Some(index) => ignore(p.remove(index))
+        None => ()
+      }
+      x.push(v)
+    }
+  }
+
+  // 初始调用
+  let p_initial = Array::new()
+  for i in 0..<n {
+    p_initial.push(i)
+  }
+  bron_kerbosch(Array::new(), p_initial, Array::new(), adj_matrix, result)
+  result
+}
